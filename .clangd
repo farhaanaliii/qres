@@ -1,0 +1,32 @@
+CompileFlags:
+  Add:
+    - -std=c11
+    - -Isrc
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Wshadow
+    - -Wstrict-prototypes
+    - -Wpointer-arith
+    - -Wformat=2
+    - -Wcast-qual
+    - -Wwrite-strings
+    - -Werror
+
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: None
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - cert-*
+      - clang-analyzer-*
+      - misc-*
+      - performance-*
+      - security-*
+    Remove:
+      - bugprone-easily-swappable-parameters
+      - misc-no-recursion
+      - cert-err33-c
+      - misc-use-internal-linkage
+
