@@ -90,6 +90,16 @@ def test_compile_utf8_filename(tmp_path: Path) -> None:
     expected_utf16be = asset.name.encode("utf-16-be")
     assert expected_utf16be in blobs["name"]
 
+    h = 0
+    for i in range(0, len(expected_utf16be), 2):
+        u = (expected_utf16be[i] << 8) | expected_utf16be[i + 1]
+        h = ((h << 4) + u) & 0xFFFFFFFF
+        h ^= (h & 0xF0000000) >> 23
+        h &= 0x0FFFFFFF
+
+    expected_entry = len(asset.name).to_bytes(2, "big") + h.to_bytes(4, "big") + expected_utf16be
+    assert expected_entry in blobs["name"]
+
 
 def test_compile_malformed_xml_raises(tmp_path: Path) -> None:
     qrc = "<RCC><qresource><file>unclosed"
