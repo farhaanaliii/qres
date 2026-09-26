@@ -50,6 +50,14 @@ The generated `_rc.py` works with `qtpy`, `PyQt5`, `PyQt6`, `PySide2`, and `PySi
 
 qres parses the `.qrc` XML, builds a virtual file tree sorted by Qt's hash function, compresses each asset with zlib at level 9 (skipping compression when it doesn't help or for `.ico` files), then serializes two binary struct formats — `v1` for Qt < 5.8 and `v2` for Qt >= 5.8 — into Python byte literals.
 
+## Limitations
+
+- **Locale attributes**: The `lang` attribute on `<qresource>` tags is ignored. All resources are compiled under the default Qt C locale (`mix = 1`).
+- **XML compression attributes**: Per-file and per-resource `<file compress="...">` and `<file threshold="...">` attributes are ignored. Compression is automatically handled at level 9 for compressible payloads.
+- **Compression format**: Assets use standard `zlib` compression to maintain universal compatibility across PyQt5, PyQt6, PySide2, and PySide6. Newer Qt 6 algorithms like `zstd` are not used.
+- **Binary `.rcc` export**: qres outputs Python `_rc.py` source modules for direct import in Python applications, rather than external binary `.rcc` files.
+
+
 ## Benchmarks
 
 Benchmarked on a 50 MB uncompressed text asset compiled into a registered Qt resource module:
