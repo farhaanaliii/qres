@@ -180,9 +180,9 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
         }
         if (part_count >= capacity) {
             capacity *= 2;
-            char **new_parts = (char **)realloc(parts, sizeof(char *) * (size_t)capacity);
+            char **new_parts = (char **)realloc((void *)parts, sizeof(char *) * (size_t)capacity);
             if (!new_parts) {
-                free(parts);
+                free((void *)parts);
                 free(temp);
                 return;
             }
@@ -193,7 +193,7 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
     }
 
     if (part_count == 0) {
-        free(parts);
+        free((void *)parts);
         free(temp);
         return;
     }
@@ -204,7 +204,7 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
         if (!child) {
             child = create_node(parts[i], 1, NULL);
             if (!child) {
-                free(parts);
+                free((void *)parts);
                 free(temp);
                 return;
             }
@@ -219,7 +219,7 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
         add_child(current, file_node);
     }
 
-    free(parts);
+    free((void *)parts);
     free(temp);
 }
 
