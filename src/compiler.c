@@ -259,6 +259,13 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
     PyObject *path_cls = PyObject_GetAttrString(pathlib, "Path");
     PyObject *base_path_obj = PyObject_CallFunction(path_cls, "s", base_dir);
     Py_DECREF(path_cls);
+    if (!base_path_obj) {
+        Py_DECREF(pathlib);
+        Py_DECREF(root_elem);
+        Py_DECREF(etree);
+        snprintf(err_buf, err_size, "Failed to resolve base directory: %s", base_dir);
+        return -1;
+    }
 
     PyObject *qresources = PyObject_CallMethod(root_elem, "findall", "s", "qresource");
     if (!qresources) {
@@ -310,6 +317,20 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             }
 
             PyObject *file_path_obj = PyObject_CallMethod(base_path_obj, "joinpath", "s", rel_path);
+            if (!file_path_obj) {
+                PyErr_Clear();
+                snprintf(err_buf, err_size, "Cannot open file: %s", rel_path);
+                Py_DECREF(stripped_text);
+                Py_DECREF(files);
+                Py_XDECREF(prefix_obj);
+                Py_DECREF(qresources);
+                Py_DECREF(base_path_obj);
+                Py_DECREF(pathlib);
+                Py_DECREF(root_elem);
+                Py_DECREF(etree);
+                return -1;
+            }
+
             PyObject *data_bytes = PyObject_CallMethod(file_path_obj, "read_bytes", NULL);
             if (!data_bytes) {
                 PyErr_Clear();
