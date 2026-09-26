@@ -250,6 +250,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
 
     PyObject *pathlib = PyImport_ImportModule("pathlib");
     if (!pathlib) {
+        PyErr_Clear();
         Py_DECREF(root_elem);
         Py_DECREF(etree);
         snprintf(err_buf, err_size, "Failed to import pathlib");
@@ -257,9 +258,18 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
     }
 
     PyObject *path_cls = PyObject_GetAttrString(pathlib, "Path");
+    if (!path_cls) {
+        PyErr_Clear();
+        Py_DECREF(pathlib);
+        Py_DECREF(root_elem);
+        Py_DECREF(etree);
+        snprintf(err_buf, err_size, "Failed to find Path in pathlib");
+        return -1;
+    }
     PyObject *base_path_obj = PyObject_CallFunction(path_cls, "s", base_dir);
     Py_DECREF(path_cls);
     if (!base_path_obj) {
+        PyErr_Clear();
         Py_DECREF(pathlib);
         Py_DECREF(root_elem);
         Py_DECREF(etree);
@@ -269,10 +279,12 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
 
     PyObject *qresources = PyObject_CallMethod(root_elem, "findall", "s", "qresource");
     if (!qresources) {
+        PyErr_Clear();
         Py_DECREF(base_path_obj);
         Py_DECREF(pathlib);
         Py_DECREF(root_elem);
         Py_DECREF(etree);
+        snprintf(err_buf, err_size, "Failed to find qresource elements");
         return -1;
     }
 
@@ -280,6 +292,9 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
     for (Py_ssize_t i = 0; i < qres_count; i++) {
         PyObject *qres = PyList_GetItem(qresources, i);
         PyObject *prefix_obj = PyObject_CallMethod(qres, "get", "ss", "prefix", "");
+        if (!prefix_obj) {
+            PyErr_Clear();
+        }
         const char *raw_prefix = prefix_obj ? PyUnicode_AsUTF8(prefix_obj) : "";
         while (*raw_prefix == '/') raw_prefix++;
 
@@ -293,6 +308,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
 
         PyObject *files = PyObject_CallMethod(qres, "findall", "s", "file");
         if (!files) {
+            PyErr_Clear();
             Py_XDECREF(prefix_obj);
             continue;
         }
@@ -301,14 +317,21 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
         for (Py_ssize_t j = 0; j < file_count; j++) {
             PyObject *file_item = PyList_GetItem(files, j);
             PyObject *text_obj = PyObject_GetAttrString(file_item, "text");
-            if (!text_obj || text_obj == Py_None) {
-                Py_XDECREF(text_obj);
+            if (!text_obj) {
+                PyErr_Clear();
+                continue;
+            }
+            if (text_obj == Py_None) {
+                Py_DECREF(text_obj);
                 continue;
             }
 
             PyObject *stripped_text = PyObject_CallMethod(text_obj, "strip", NULL);
             Py_DECREF(text_obj);
-            if (!stripped_text) continue;
+            if (!stripped_text) {
+                PyErr_Clear();
+                continue;
+            }
 
             const char *rel_path = PyUnicode_AsUTF8(stripped_text);
             if (!rel_path || strlen(rel_path) == 0) {
@@ -357,12 +380,19 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
                     double mtime = PyFloat_AsDouble(mtime_obj);
                     lastmod = (long long)(mtime * 1000.0);
                     Py_DECREF(mtime_obj);
+                } else {
+                    PyErr_Clear();
                 }
                 Py_DECREF(stat_obj);
+            } else {
+                PyErr_Clear();
             }
             Py_DECREF(file_path_obj);
 
             PyObject *alias_obj = PyObject_CallMethod(file_item, "get", "s", "alias");
+            if (!alias_obj) {
+                PyErr_Clear();
+            }
             const char *target = (alias_obj && alias_obj != Py_None) ? PyUnicode_AsUTF8(alias_obj) : rel_path;
             while (*target == '/') target++;
 
@@ -488,6 +518,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
 
         PyObject *py_name = PyUnicode_FromString(node->name);
         if (!py_name) {
+            PyErr_Clear();
             snprintf(out->error, sizeof(out->error), "Invalid name: %s", node->name);
             free((void *)fl.nodes);
             free_node(root);
@@ -497,6 +528,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         PyObject *u16_bytes = PyUnicode_AsEncodedString(py_name, "utf-16be", "strict");
         Py_DECREF(py_name);
         if (!u16_bytes) {
+            PyErr_Clear();
             snprintf(out->error, sizeof(out->error), "Failed to encode name to UTF-16: %s", node->name);
             free((void *)fl.nodes);
             free_node(root);
@@ -516,6 +548,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
 
     PyObject *zlib_mod = PyImport_ImportModule("zlib");
     if (!zlib_mod) {
+        PyErr_Clear();
         snprintf(out->error, sizeof(out->error), "Failed to import Python zlib module");
         free((void *)fl.nodes);
         free_node(root);
