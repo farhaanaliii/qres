@@ -4,6 +4,8 @@ import sys
 
 from ._qres import compile as _compile
 
+__version__ = "0.1.1"
+
 _BINDINGS = ("PyQt6", "PySide6", "PyQt5", "PySide2", "qtpy")
 
 _HEADER_BOILERPLATE = """# -*- coding: utf-8 -*-
@@ -16,8 +18,10 @@ _HEADER_BOILERPLATE = """# -*- coding: utf-8 -*-
 
 """
 
-_FOOTER_BOILERPLATE = """qt_version = [int(v) for v in QtCore.qVersion().split('.')]
-if qt_version < [5, 8, 0]:
+_FOOTER_BOILERPLATE = """import re
+
+qt_version = [int(x) for x in re.findall(r'\\d+', QtCore.qVersion())[:3]]
+if (qt_version + [0, 0, 0])[:3] < [5, 8, 0]:
     rcc_version = 1
     qt_resource_struct = qt_resource_struct_v1
 else:
@@ -60,14 +64,12 @@ def _generate_import_header(binding: str) -> str:
     return "".join(lines)
 
 def _generate_resource_blob(name: str, data: bytes) -> str:
-    return (
-        f'{name} = b"\\\n'
-        + "".join(
-            "".join(_BYTE_ESCAPES[byte] for byte in data[i:i + 16]) + "\\\n"
-            for i in range(0, len(data), 16)
-        )
-        + '"\n\n'
-    )
+    escaped = [_BYTE_ESCAPES[b] for b in data]
+    lines = [
+        "".join(escaped[i : i + 16]) + "\\\n"
+        for i in range(0, len(escaped), 16)
+    ]
+    return f'{name} = b"\\\n{"".join(lines)}"\n\n'
 
 
 def compile_file(
@@ -79,6 +81,7 @@ def compile_file(
     blobs = compile(qrc_path.read_text(encoding="utf-8"), str(qrc_path.parent))
 
     target = Path(output) if output else qrc_path.with_name(f"{qrc_path.stem}_rc.py")
+    target.parent.mkdir(parents=True, exist_ok=True)
     import_header = _generate_import_header(binding)
     blobs_code = "".join(_generate_resource_blob(var_name, blobs[key]) for var_name, key in _RESOURCE_BLOBS)
 
@@ -99,6 +102,12 @@ def main() -> None:
         help="Target Qt binding (default: auto)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Print verbose output")
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     args = parser.parse_args()
 
     try:

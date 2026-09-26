@@ -35,10 +35,21 @@ static PyObject *py_compile(PyObject *self, PyObject *args) {
     }
 
     PyObject *dict = PyDict_New();
-    PyDict_SetItemString(dict, "data",      data);
-    PyDict_SetItemString(dict, "name",      name);
-    PyDict_SetItemString(dict, "struct_v1", struct_v1);
-    PyDict_SetItemString(dict, "struct_v2", struct_v2);
+    if (!dict) {
+        Py_DECREF(data);
+        Py_DECREF(name);
+        Py_DECREF(struct_v1);
+        Py_DECREF(struct_v2);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(dict, "data",      data) < 0 ||
+        PyDict_SetItemString(dict, "name",      name) < 0 ||
+        PyDict_SetItemString(dict, "struct_v1", struct_v1) < 0 ||
+        PyDict_SetItemString(dict, "struct_v2", struct_v2) < 0) {
+        Py_DECREF(dict);
+        dict = NULL;
+    }
 
     Py_DECREF(data);
     Py_DECREF(name);

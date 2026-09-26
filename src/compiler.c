@@ -83,12 +83,7 @@ void bb_append_u32be(ByteBuffer *bb, unsigned int val) {
 }
 
 void bb_append_i32be(ByteBuffer *bb, int val) {
-    unsigned int u = (unsigned int)val;
-    unsigned char buf[4] = {
-        (unsigned char)((u >> 24) & 0xFF), (unsigned char)((u >> 16) & 0xFF),
-        (unsigned char)((u >> 8) & 0xFF),  (unsigned char)(u & 0xFF)
-    };
-    bb_append(bb, buf, 4);
+    bb_append_u32be(bb, (unsigned int)val);
 }
 
 void bb_append_u64be(ByteBuffer *bb, unsigned long long val) {
@@ -134,68 +129,57 @@ static ResourceNode *find_child(ResourceNode *parent, const char *name, int is_d
     return NULL;
 }
 
-static void add_child(ResourceNode *parent, ResourceNode *child) {
+static int add_child(ResourceNode *parent, ResourceNode *child) {
     if (parent->child_count >= parent->child_capacity) {
         int new_cap = parent->child_capacity == 0 ? 4 : parent->child_capacity * 2;
         ResourceNode **new_children = (ResourceNode **)realloc((void *)parent->children, sizeof(ResourceNode *) * (size_t)new_cap);
-        if (!new_children) return;
+        if (!new_children) return -1;
         parent->children = new_children;
         parent->child_capacity = new_cap;
     }
     parent->children[parent->child_count++] = child;
+    return 0;
 }
 
-static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *data_bytes, long long lastmod) {
+static int add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *data_bytes, long long lastmod) {
     char *temp = strdup(virtual_path);
-    if (!temp) return;
+    if (!temp) return -1;
 
     char *p = temp;
     while (*p == '/') p++;
 
-    char *tok = strtok(p, "/");
+    char *saveptr = NULL;
+    char *tok = strtok_r(p, "/", &saveptr);
     if (!tok) {
         free(temp);
-        return;
+        return 0;
     }
 
-    int capacity = 8;
-    int part_count = 0;
+    int capacity = 8, part_count = 0, ret = -1;
     char **parts = (char **)malloc(sizeof(char *) * (size_t)capacity);
     if (!parts) {
         free(temp);
-        return;
+        return -1;
     }
 
     while (tok) {
         if (strcmp(tok, ".") == 0) {
-            tok = strtok(NULL, "/");
+            tok = strtok_r(NULL, "/", &saveptr);
             continue;
         }
         if (strcmp(tok, "..") == 0) {
-            if (part_count > 0) {
-                part_count--;
-            }
-            tok = strtok(NULL, "/");
+            if (part_count > 0) part_count--;
+            tok = strtok_r(NULL, "/", &saveptr);
             continue;
         }
         if (part_count >= capacity) {
             capacity *= 2;
             char **new_parts = (char **)realloc((void *)parts, sizeof(char *) * (size_t)capacity);
-            if (!new_parts) {
-                free((void *)parts);
-                free(temp);
-                return;
-            }
+            if (!new_parts) goto cleanup;
             parts = new_parts;
         }
         parts[part_count++] = tok;
-        tok = strtok(NULL, "/");
-    }
-
-    if (part_count == 0) {
-        free((void *)parts);
-        free(temp);
-        return;
+        tok = strtok_r(NULL, "/", &saveptr);
     }
 
     ResourceNode *current = root;
@@ -203,24 +187,31 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
         ResourceNode *child = find_child(current, parts[i], 1);
         if (!child) {
             child = create_node(parts[i], 1, NULL);
-            if (!child) {
-                free((void *)parts);
-                free(temp);
-                return;
+            if (!child) goto cleanup;
+            if (add_child(current, child) != 0) {
+                free_node(child);
+                goto cleanup;
             }
-            add_child(current, child);
         }
         current = child;
     }
 
-    ResourceNode *file_node = create_node(parts[part_count - 1], 0, data_bytes);
-    if (file_node) {
+    if (part_count > 0) {
+        ResourceNode *file_node = create_node(parts[part_count - 1], 0, data_bytes);
+        if (!file_node) goto cleanup;
         file_node->lastmod = lastmod;
-        add_child(current, file_node);
+        if (add_child(current, file_node) != 0) {
+            free_node(file_node);
+            goto cleanup;
+        }
     }
 
+    ret = 0;
+
+cleanup:
     free((void *)parts);
     free(temp);
+    return ret;
 }
 
 static int parse_qrc(const char *xml_content, ResourceNode *root, const char *base_dir, char *err_buf, size_t err_size) {
@@ -248,68 +239,67 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
         return -1;
     }
 
-    PyObject *pathlib = PyImport_ImportModule("pathlib");
+    PyObject *pathlib = NULL;
+    PyObject *base_path_obj = NULL;
+    PyObject *qresources = NULL;
+    PyObject *files = NULL;
+    PyObject *prefix_obj = NULL;
+    PyObject *stripped_text = NULL;
+    PyObject *file_path_obj = NULL;
+    PyObject *data_bytes = NULL;
+    PyObject *alias_obj = NULL;
+    char *vpath = NULL;
+    int ret = -1;
+
+    pathlib = PyImport_ImportModule("pathlib");
     if (!pathlib) {
         PyErr_Clear();
-        Py_DECREF(root_elem);
-        Py_DECREF(etree);
         snprintf(err_buf, err_size, "Failed to import pathlib");
-        return -1;
+        goto cleanup;
     }
 
     PyObject *path_cls = PyObject_GetAttrString(pathlib, "Path");
     if (!path_cls) {
         PyErr_Clear();
-        Py_DECREF(pathlib);
-        Py_DECREF(root_elem);
-        Py_DECREF(etree);
         snprintf(err_buf, err_size, "Failed to find Path in pathlib");
-        return -1;
+        goto cleanup;
     }
-    PyObject *base_path_obj = PyObject_CallFunction(path_cls, "s", base_dir);
+    base_path_obj = PyObject_CallFunction(path_cls, "s", base_dir);
     Py_DECREF(path_cls);
     if (!base_path_obj) {
         PyErr_Clear();
-        Py_DECREF(pathlib);
-        Py_DECREF(root_elem);
-        Py_DECREF(etree);
         snprintf(err_buf, err_size, "Failed to resolve base directory: %s", base_dir);
-        return -1;
+        goto cleanup;
     }
 
-    PyObject *qresources = PyObject_CallMethod(root_elem, "findall", "s", "qresource");
+    qresources = PyObject_CallMethod(root_elem, "findall", "s", "qresource");
     if (!qresources) {
         PyErr_Clear();
-        Py_DECREF(base_path_obj);
-        Py_DECREF(pathlib);
-        Py_DECREF(root_elem);
-        Py_DECREF(etree);
         snprintf(err_buf, err_size, "Failed to find qresource elements");
-        return -1;
+        goto cleanup;
     }
 
     Py_ssize_t qres_count = PyList_Size(qresources);
     for (Py_ssize_t i = 0; i < qres_count; i++) {
         PyObject *qres = PyList_GetItem(qresources, i);
-        PyObject *prefix_obj = PyObject_CallMethod(qres, "get", "ss", "prefix", "");
-        if (!prefix_obj) {
-            PyErr_Clear();
-        }
+        Py_XDECREF(prefix_obj);
+        prefix_obj = PyObject_CallMethod(qres, "get", "ss", "prefix", "");
+        if (!prefix_obj) PyErr_Clear();
+
         const char *raw_prefix = prefix_obj ? PyUnicode_AsUTF8(prefix_obj) : "";
+        if (!raw_prefix) {
+            PyErr_Clear();
+            raw_prefix = "";
+        }
         while (*raw_prefix == '/') raw_prefix++;
 
-        char clean_prefix[256];
-        strncpy(clean_prefix, raw_prefix, sizeof(clean_prefix) - 1);
-        clean_prefix[sizeof(clean_prefix) - 1] = '\0';
-        size_t plen = strlen(clean_prefix);
-        while (plen > 0 && clean_prefix[plen - 1] == '/') {
-            clean_prefix[--plen] = '\0';
-        }
+        size_t plen = strlen(raw_prefix);
+        while (plen > 0 && raw_prefix[plen - 1] == '/') plen--;
 
-        PyObject *files = PyObject_CallMethod(qres, "findall", "s", "file");
+        Py_XDECREF(files);
+        files = PyObject_CallMethod(qres, "findall", "s", "file");
         if (!files) {
             PyErr_Clear();
-            Py_XDECREF(prefix_obj);
             continue;
         }
 
@@ -326,7 +316,8 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
                 continue;
             }
 
-            PyObject *stripped_text = PyObject_CallMethod(text_obj, "strip", NULL);
+            Py_XDECREF(stripped_text);
+            stripped_text = PyObject_CallMethod(text_obj, "strip", NULL);
             Py_DECREF(text_obj);
             if (!stripped_text) {
                 PyErr_Clear();
@@ -334,42 +325,24 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             }
 
             const char *rel_path = PyUnicode_AsUTF8(stripped_text);
-            if (!rel_path || strlen(rel_path) == 0) {
-                Py_DECREF(stripped_text);
-                continue;
-            }
+            if (!rel_path || strlen(rel_path) == 0) continue;
 
-            PyObject *file_path_obj = PyObject_CallMethod(base_path_obj, "joinpath", "s", rel_path);
+            Py_XDECREF(file_path_obj);
+            file_path_obj = PyObject_CallMethod(base_path_obj, "joinpath", "s", rel_path);
             if (!file_path_obj) {
                 PyErr_Clear();
                 snprintf(err_buf, err_size, "Cannot open file: %s", rel_path);
-                Py_DECREF(stripped_text);
-                Py_DECREF(files);
-                Py_XDECREF(prefix_obj);
-                Py_DECREF(qresources);
-                Py_DECREF(base_path_obj);
-                Py_DECREF(pathlib);
-                Py_DECREF(root_elem);
-                Py_DECREF(etree);
-                return -1;
+                goto cleanup;
             }
 
-            PyObject *data_bytes = PyObject_CallMethod(file_path_obj, "read_bytes", NULL);
+            Py_XDECREF(data_bytes);
+            data_bytes = PyObject_CallMethod(file_path_obj, "read_bytes", NULL);
             if (!data_bytes) {
                 PyErr_Clear();
                 PyObject *path_str = PyObject_Str(file_path_obj);
                 snprintf(err_buf, err_size, "Cannot open file: %s", path_str ? PyUnicode_AsUTF8(path_str) : rel_path);
                 Py_XDECREF(path_str);
-                Py_DECREF(file_path_obj);
-                Py_DECREF(stripped_text);
-                Py_DECREF(files);
-                Py_XDECREF(prefix_obj);
-                Py_DECREF(qresources);
-                Py_DECREF(base_path_obj);
-                Py_DECREF(pathlib);
-                Py_DECREF(root_elem);
-                Py_DECREF(etree);
-                return -1;
+                goto cleanup;
             }
 
             long long lastmod = 0;
@@ -387,44 +360,60 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             } else {
                 PyErr_Clear();
             }
-            Py_DECREF(file_path_obj);
 
-            PyObject *alias_obj = PyObject_CallMethod(file_item, "get", "s", "alias");
-            if (!alias_obj) {
-                PyErr_Clear();
+            Py_XDECREF(alias_obj);
+            alias_obj = PyObject_CallMethod(file_item, "get", "s", "alias");
+            if (!alias_obj) PyErr_Clear();
+
+            const char *target = rel_path;
+            if (alias_obj && alias_obj != Py_None) {
+                const char *alias_str = PyUnicode_AsUTF8(alias_obj);
+                if (alias_str) {
+                    target = alias_str;
+                } else {
+                    PyErr_Clear();
+                }
             }
-            const char *target = (alias_obj && alias_obj != Py_None) ? PyUnicode_AsUTF8(alias_obj) : rel_path;
             while (*target == '/') target++;
 
             size_t vpath_len = plen + strlen(target) + 2;
-            char *vpath = (char *)malloc(vpath_len);
-            if (vpath) {
-                if (plen > 0) {
-                    snprintf(vpath, vpath_len, "%s/%s", clean_prefix, target);
-                } else {
-                    snprintf(vpath, vpath_len, "%s", target);
-                }
-                for (char *c = vpath; *c; c++) {
-                    if (*c == '\\') *c = '/';
-                }
-                add_to_tree(root, vpath, data_bytes, lastmod);
-                free(vpath);
+            free(vpath);
+            vpath = (char *)malloc(vpath_len);
+            if (!vpath) {
+                snprintf(err_buf, err_size, "Failed to allocate memory for virtual path");
+                goto cleanup;
             }
-
-            Py_XDECREF(alias_obj);
-            Py_DECREF(data_bytes);
-            Py_DECREF(stripped_text);
+            if (plen > 0) {
+                snprintf(vpath, vpath_len, "%.*s/%s", (int)plen, raw_prefix, target);
+            } else {
+                snprintf(vpath, vpath_len, "%s", target);
+            }
+            for (char *c = vpath; *c; c++) {
+                if (*c == '\\') *c = '/';
+            }
+            if (add_to_tree(root, vpath, data_bytes, lastmod) != 0) {
+                snprintf(err_buf, err_size, "Failed to build resource tree");
+                goto cleanup;
+            }
         }
-        Py_DECREF(files);
-        Py_XDECREF(prefix_obj);
     }
 
-    Py_DECREF(qresources);
-    Py_DECREF(base_path_obj);
-    Py_DECREF(pathlib);
+    ret = 0;
+
+cleanup:
+    free(vpath);
+    Py_XDECREF(alias_obj);
+    Py_XDECREF(data_bytes);
+    Py_XDECREF(file_path_obj);
+    Py_XDECREF(stripped_text);
+    Py_XDECREF(files);
+    Py_XDECREF(prefix_obj);
+    Py_XDECREF(qresources);
+    Py_XDECREF(base_path_obj);
+    Py_XDECREF(pathlib);
     Py_DECREF(root_elem);
     Py_DECREF(etree);
-    return 0;
+    return ret;
 }
 
 static int compare_nodes(const void *a, const void *b) {
@@ -446,11 +435,11 @@ static void sort_tree(ResourceNode *node) {
     }
 }
 
-static void flatten_tree(ResourceNode *root, FlatList *fl) {
+static int flatten_tree(ResourceNode *root, FlatList *fl) {
     int queue_capacity = 1000;
     ResourceNode **queue = (ResourceNode **)malloc(sizeof(ResourceNode *) * (size_t)queue_capacity);
-    if (!queue) return;
-    int head = 0, tail = 0;
+    if (!queue) return -1;
+    int head = 0, tail = 0, ret = -1;
     queue[tail++] = root;
 
     while (head < tail) {
@@ -459,10 +448,7 @@ static void flatten_tree(ResourceNode *root, FlatList *fl) {
         if (fl->count >= fl->capacity) {
             int new_cap = fl->capacity == 0 ? 1000 : fl->capacity * 2;
             ResourceNode **new_nodes = (ResourceNode **)realloc((void *)fl->nodes, sizeof(ResourceNode *) * (size_t)new_cap);
-            if (!new_nodes) {
-                free((void *)queue);
-                return;
-            }
+            if (!new_nodes) goto cleanup;
             fl->nodes = new_nodes;
             fl->capacity = new_cap;
         }
@@ -472,17 +458,18 @@ static void flatten_tree(ResourceNode *root, FlatList *fl) {
             if (tail >= queue_capacity) {
                 int new_q_cap = queue_capacity * 2;
                 ResourceNode **new_q = (ResourceNode **)realloc((void *)queue, sizeof(ResourceNode *) * (size_t)new_q_cap);
-                if (!new_q) {
-                    free((void *)queue);
-                    return;
-                }
+                if (!new_q) goto cleanup;
                 queue = new_q;
                 queue_capacity = new_q_cap;
             }
             queue[tail++] = curr->children[i];
         }
     }
+    ret = 0;
+
+cleanup:
     free((void *)queue);
+    return ret;
 }
 
 int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *out) {
@@ -498,15 +485,20 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         return -1;
     }
 
+    FlatList fl = {NULL, 0, 0};
+    PyObject *zlib_mod = NULL;
+    int ret = -1;
+
     if (parse_qrc(xml_content, root, base_dir, out->error, sizeof(out->error)) != 0) {
-        free_node(root);
-        return -1;
+        goto cleanup;
     }
 
     sort_tree(root);
 
-    FlatList fl = {NULL, 0, 0};
-    flatten_tree(root, &fl);
+    if (flatten_tree(root, &fl) != 0) {
+        snprintf(out->error, sizeof(out->error), "Failed to allocate memory while flattening resource tree");
+        goto cleanup;
+    }
 
     for (int i = 0; i < fl.count; i++) {
         ResourceNode *node = fl.nodes[i];
@@ -520,9 +512,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         if (!py_name) {
             PyErr_Clear();
             snprintf(out->error, sizeof(out->error), "Invalid name: %s", node->name);
-            free((void *)fl.nodes);
-            free_node(root);
-            return -1;
+            goto cleanup;
         }
 
         PyObject *u16_bytes = PyUnicode_AsEncodedString(py_name, "utf-16be", "strict");
@@ -530,9 +520,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         if (!u16_bytes) {
             PyErr_Clear();
             snprintf(out->error, sizeof(out->error), "Failed to encode name to UTF-16: %s", node->name);
-            free((void *)fl.nodes);
-            free_node(root);
-            return -1;
+            goto cleanup;
         }
 
         char *u16_data = NULL;
@@ -546,13 +534,11 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         Py_DECREF(u16_bytes);
     }
 
-    PyObject *zlib_mod = PyImport_ImportModule("zlib");
+    zlib_mod = PyImport_ImportModule("zlib");
     if (!zlib_mod) {
         PyErr_Clear();
         snprintf(out->error, sizeof(out->error), "Failed to import Python zlib module");
-        free((void *)fl.nodes);
-        free_node(root);
-        return -1;
+        goto cleanup;
     }
 
     for (int i = 0; i < fl.count; i++) {
@@ -569,10 +555,7 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         if (!comp_obj) {
             PyErr_Clear();
             snprintf(out->error, sizeof(out->error), "Failed to compress file data: %s", node->name);
-            Py_DECREF(zlib_mod);
-            free((void *)fl.nodes);
-            free_node(root);
-            return -1;
+            goto cleanup;
         }
 
         char *comp_data = NULL;
@@ -596,8 +579,6 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
 
         Py_DECREF(comp_obj);
     }
-
-    Py_DECREF(zlib_mod);
 
     for (int i = 0; i < fl.count; i++) {
         ResourceNode *node = fl.nodes[i];
@@ -632,7 +613,11 @@ int compile_qrc(const char *xml_content, const char *base_dir, CompileResult *ou
         bb_append_u64be(&out->struct_v2_bytes, (unsigned long long)node->lastmod);
     }
 
+    ret = 0;
+
+cleanup:
+    Py_XDECREF(zlib_mod);
     free((void *)fl.nodes);
     free_node(root);
-    return 0;
+    return ret;
 }

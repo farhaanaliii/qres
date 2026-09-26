@@ -191,3 +191,39 @@ def test_compile_normalized_paths(tmp_path: Path) -> None:
     assert (len(".").to_bytes(2, "big") + dot_utf16) not in blobs["name"]
 
 
+def test_compile_file_creates_parent_directories(tmp_path: Path) -> None:
+    asset = tmp_path / "data.bin"
+    asset.write_bytes(b"\x00\x01\x02")
+    qrc_file = tmp_path / "test.qrc"
+    qrc_file.write_text(f"<RCC><qresource><file>{asset.name}</file></qresource></RCC>", encoding="utf-8")
+    nested_out = tmp_path / "nested" / "deep" / "resources_rc.py"
+
+    qres.compile_file(qrc_file, nested_out)
+    assert nested_out.exists()
+
+
+def test_compile_long_prefix(tmp_path: Path) -> None:
+    asset = tmp_path / "file.txt"
+    asset.write_text("content", encoding="utf-8")
+    long_prefix = "a" * 300
+    qrc = f"""<RCC>
+    <qresource prefix="/{long_prefix}">
+        <file>{asset.name}</file>
+    </qresource>
+</RCC>"""
+
+    blobs = qres.compile(qrc, str(tmp_path))
+    assert long_prefix.encode("utf-16-be") in blobs["name"]
+
+
+def test_footer_handles_complex_qt_versions() -> None:
+    import re
+    versions = ["6.5.0-beta1", "5.15.2+kde", "6.2", "6.7.1.final"]
+    for ver in versions:
+        qt_version = [int(x) for x in re.findall(r"\d+", ver)[:3]]
+        effective = (qt_version + [0, 0, 0])[:3]
+        assert len(effective) == 3
+        assert all(isinstance(x, int) for x in effective)
+
+
+
