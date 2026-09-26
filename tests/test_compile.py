@@ -168,3 +168,26 @@ def test_compile_file_default_auto_binding(tmp_path: Path) -> None:
     assert "from PyQt6 import QtCore" in content
     assert "from qtpy import QtCore" in content
 
+
+def test_compile_normalized_paths(tmp_path: Path) -> None:
+    asset = tmp_path / "hello.txt"
+    asset.write_text("Hello Normalized", encoding="utf-8")
+
+    qrc = f"""<RCC>
+    <qresource prefix="/sub/../assets">
+        <file>./{asset.name}</file>
+    </qresource>
+</RCC>"""
+
+    blobs = qres.compile(qrc, str(tmp_path))
+    dot_utf16 = ".".encode("utf-16-be")
+    assets_utf16 = "assets".encode("utf-16-be")
+    sub_utf16 = "sub".encode("utf-16-be")
+    hello_utf16 = asset.name.encode("utf-16-be")
+
+    assert assets_utf16 in blobs["name"]
+    assert hello_utf16 in blobs["name"]
+    assert sub_utf16 not in blobs["name"]
+    assert (len(".").to_bytes(2, "big") + dot_utf16) not in blobs["name"]
+
+

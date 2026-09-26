@@ -166,6 +166,17 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
     }
 
     while (tok) {
+        if (strcmp(tok, ".") == 0) {
+            tok = strtok(NULL, "/");
+            continue;
+        }
+        if (strcmp(tok, "..") == 0) {
+            if (part_count > 0) {
+                part_count--;
+            }
+            tok = strtok(NULL, "/");
+            continue;
+        }
         if (part_count >= capacity) {
             capacity *= 2;
             char **new_parts = (char **)realloc(parts, sizeof(char *) * (size_t)capacity);
@@ -178,6 +189,12 @@ static void add_to_tree(ResourceNode *root, const char *virtual_path, PyObject *
         }
         parts[part_count++] = tok;
         tok = strtok(NULL, "/");
+    }
+
+    if (part_count == 0) {
+        free(parts);
+        free(temp);
+        return;
     }
 
     ResourceNode *current = root;
