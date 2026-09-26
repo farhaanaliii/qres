@@ -17,27 +17,28 @@ unsigned int qt_hash(const char *str, unsigned int chained) {
     unsigned int h = chained;
     const unsigned char *p = (const unsigned char *)str;
     while (*p) {
-        if (*p < 0x80) {
-            h = hash_u16(h, *p);
-            p++;
-        } else if ((*p & 0xE0) == 0xC0) {
-            unsigned short u = (unsigned short)(((*p & 0x1F) << 6) | (p[1] & 0x3F));
-            h = hash_u16(h, u);
-            p += 2;
-        } else if ((*p & 0xF0) == 0xE0) {
-            unsigned short u = (unsigned short)(((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F));
-            h = hash_u16(h, u);
-            p += 3;
-        } else if ((*p & 0xF8) == 0xF0) {
-            unsigned int cp = (unsigned int)(((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F));
-            cp -= 0x10000;
-            h = hash_u16(h, (unsigned short)(0xD800 + (cp >> 10)));
-            h = hash_u16(h, (unsigned short)(0xDC00 + (cp & 0x3FF)));
-            p += 4;
-        } else {
-            h = hash_u16(h, *p);
-            p++;
+        if (*p >= 0x80) {
+            if ((*p & 0xE0) == 0xC0) {
+                unsigned short u = (unsigned short)(((*p & 0x1F) << 6) | (p[1] & 0x3F));
+                h = hash_u16(h, u);
+                p += 2;
+                continue;
+            } else if ((*p & 0xF0) == 0xE0) {
+                unsigned short u = (unsigned short)(((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F));
+                h = hash_u16(h, u);
+                p += 3;
+                continue;
+            } else if ((*p & 0xF8) == 0xF0) {
+                unsigned int cp = (unsigned int)(((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F));
+                cp -= 0x10000;
+                h = hash_u16(h, (unsigned short)(0xD800 + (cp >> 10)));
+                h = hash_u16(h, (unsigned short)(0xDC00 + (cp & 0x3FF)));
+                p += 4;
+                continue;
+            }
         }
+        h = hash_u16(h, *p);
+        p++;
     }
     return h;
 }
