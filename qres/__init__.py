@@ -4,7 +4,7 @@ import sys
 
 from ._qres import compile as _compile
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 _BINDINGS = ("PyQt6", "PySide6", "PyQt5", "PySide2", "qtpy")
 
