@@ -226,4 +226,34 @@ def test_footer_handles_complex_qt_versions() -> None:
         assert all(isinstance(x, int) for x in effective)
 
 
+def test_compile_windows_separators_and_leading_slashes(tmp_path: Path) -> None:
+    asset_dir = tmp_path / "nested" / "assets"
+    asset_dir.mkdir(parents=True)
+    asset = asset_dir / "item.txt"
+    asset.write_text("Windows paths", encoding="utf-8")
+
+    qrc = """<RCC>
+    <qresource prefix="/app\\ui">
+        <file>/nested\\assets/item.txt</file>
+    </qresource>
+</RCC>"""
+
+    blobs = qres.compile(qrc, str(tmp_path))
+    assert len(blobs["data"]) > 0
+    assert "app".encode("utf-16-be") in blobs["name"]
+    assert "ui".encode("utf-16-be") in blobs["name"]
+    assert "item.txt".encode("utf-16-be") in blobs["name"]
+
+
+def test_compile_empty_file_tag_raises(tmp_path: Path) -> None:
+    qrc = "<RCC><qresource><file></file></qresource></RCC>"
+    with pytest.raises(RuntimeError, match="Cannot open file"):
+        qres.compile(qrc, str(tmp_path))
+
+    qrc_spaces = "<RCC><qresource><file>   </file></qresource></RCC>"
+    with pytest.raises(RuntimeError, match="Cannot open file"):
+        qres.compile(qrc_spaces, str(tmp_path))
+
+
+
 

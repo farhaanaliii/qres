@@ -249,6 +249,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
     PyObject *data_bytes = NULL;
     PyObject *alias_obj = NULL;
     char *vpath = NULL;
+    char *clean_rel = NULL;
     int ret = -1;
 
     pathlib = PyImport_ImportModule("pathlib");
@@ -271,6 +272,13 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
         snprintf(err_buf, err_size, "Failed to resolve base directory: %s", base_dir);
         goto cleanup;
     }
+    PyObject *resolved_base = PyObject_CallMethod(base_path_obj, "resolve", NULL);
+    if (resolved_base) {
+        Py_DECREF(base_path_obj);
+        base_path_obj = resolved_base;
+    } else {
+        PyErr_Clear();
+    }
 
     qresources = PyObject_CallMethod(root_elem, "findall", "s", "qresource");
     if (!qresources) {
@@ -291,10 +299,10 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             PyErr_Clear();
             raw_prefix = "";
         }
-        while (*raw_prefix == '/') raw_prefix++;
+        while (*raw_prefix == '/' || *raw_prefix == '\\') raw_prefix++;
 
         size_t plen = strlen(raw_prefix);
-        while (plen > 0 && raw_prefix[plen - 1] == '/') plen--;
+        while (plen > 0 && (raw_prefix[plen - 1] == '/' || raw_prefix[plen - 1] == '\\')) plen--;
 
         Py_XDECREF(files);
         files = PyObject_CallMethod(qres, "findall", "s", "file");
@@ -307,13 +315,11 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
         for (Py_ssize_t j = 0; j < file_count; j++) {
             PyObject *file_item = PyList_GetItem(files, j);
             PyObject *text_obj = PyObject_GetAttrString(file_item, "text");
-            if (!text_obj) {
+            if (!text_obj || text_obj == Py_None) {
+                Py_XDECREF(text_obj);
                 PyErr_Clear();
-                continue;
-            }
-            if (text_obj == Py_None) {
-                Py_DECREF(text_obj);
-                continue;
+                snprintf(err_buf, err_size, "Cannot open file: empty path");
+                goto cleanup;
             }
 
             Py_XDECREF(stripped_text);
@@ -321,17 +327,39 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             Py_DECREF(text_obj);
             if (!stripped_text) {
                 PyErr_Clear();
-                continue;
+                snprintf(err_buf, err_size, "Cannot open file: empty path");
+                goto cleanup;
             }
 
-            const char *rel_path = PyUnicode_AsUTF8(stripped_text);
-            if (!rel_path || strlen(rel_path) == 0) continue;
+            const char *raw_rel = PyUnicode_AsUTF8(stripped_text);
+            if (!raw_rel || strlen(raw_rel) == 0) {
+                PyErr_Clear();
+                snprintf(err_buf, err_size, "Cannot open file: empty path");
+                goto cleanup;
+            }
+
+            free(clean_rel);
+            clean_rel = strdup(raw_rel);
+            if (!clean_rel) {
+                snprintf(err_buf, err_size, "Failed to allocate memory for path");
+                goto cleanup;
+            }
+
+            char *p = clean_rel;
+            while (*p == '/' || *p == '\\') p++;
+            if (*p == '\0') {
+                snprintf(err_buf, err_size, "Cannot open file: empty path");
+                goto cleanup;
+            }
+            for (char *c = p; *c; c++) {
+                if (*c == '\\') *c = '/';
+            }
 
             Py_XDECREF(file_path_obj);
-            file_path_obj = PyObject_CallMethod(base_path_obj, "joinpath", "s", rel_path);
+            file_path_obj = PyObject_CallMethod(base_path_obj, "joinpath", "s", p);
             if (!file_path_obj) {
                 PyErr_Clear();
-                snprintf(err_buf, err_size, "Cannot open file: %s", rel_path);
+                snprintf(err_buf, err_size, "Cannot open file: %s", p);
                 goto cleanup;
             }
 
@@ -339,9 +367,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             data_bytes = PyObject_CallMethod(file_path_obj, "read_bytes", NULL);
             if (!data_bytes) {
                 PyErr_Clear();
-                PyObject *path_str = PyObject_Str(file_path_obj);
-                snprintf(err_buf, err_size, "Cannot open file: %s", path_str ? PyUnicode_AsUTF8(path_str) : rel_path);
-                Py_XDECREF(path_str);
+                snprintf(err_buf, err_size, "Cannot open file: %s", p);
                 goto cleanup;
             }
 
@@ -365,7 +391,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
             alias_obj = PyObject_CallMethod(file_item, "get", "s", "alias");
             if (!alias_obj) PyErr_Clear();
 
-            const char *target = rel_path;
+            const char *target = p;
             if (alias_obj && alias_obj != Py_None) {
                 const char *alias_str = PyUnicode_AsUTF8(alias_obj);
                 if (alias_str) {
@@ -374,7 +400,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
                     PyErr_Clear();
                 }
             }
-            while (*target == '/') target++;
+            while (*target == '/' || *target == '\\') target++;
 
             size_t vpath_len = plen + strlen(target) + 2;
             free(vpath);
@@ -401,6 +427,7 @@ static int parse_qrc(const char *xml_content, ResourceNode *root, const char *ba
     ret = 0;
 
 cleanup:
+    free(clean_rel);
     free(vpath);
     Py_XDECREF(alias_obj);
     Py_XDECREF(data_bytes);
@@ -619,5 +646,11 @@ cleanup:
     Py_XDECREF(zlib_mod);
     free((void *)fl.nodes);
     free_node(root);
+    if (ret != 0) {
+        bb_free(&out->name_bytes);
+        bb_free(&out->data_bytes);
+        bb_free(&out->struct_v1_bytes);
+        bb_free(&out->struct_v2_bytes);
+    }
     return ret;
 }

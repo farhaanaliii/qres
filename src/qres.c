@@ -12,7 +12,7 @@ static PyObject *py_compile(PyObject *self, PyObject *args) {
 
     CompileResult result;
     if (compile_qrc(xml_content, base_dir, &result) != 0) {
-        PyErr_SetString(PyExc_RuntimeError, result.error);
+        PyErr_SetString(PyExc_RuntimeError, result.error[0] ? result.error : "Failed to compile resource file");
         return NULL;
     }
 
