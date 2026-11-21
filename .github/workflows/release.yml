@@ -20,10 +20,10 @@ jobs:
             runner: ubuntu-latest
             arch: aarch64
           - os: macos
-            runner: macos-14
+            runner: macos-latest
             arch: x86_64
           - os: macos
-            runner: macos-14
+            runner: macos-latest
             arch: arm64
           - os: windows
             runner: windows-latest
